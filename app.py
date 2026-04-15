@@ -26,12 +26,12 @@ MY_WHATSAPP = os.environ.get("MY_WHATSAPP", "whatsapp:+61449984648")
 GMAIL_USER = os.environ.get("GMAIL_USER")
 GMAIL_PASS = os.environ.get("GMAIL_PASS")
 DATABASE_URL = os.environ.get("DATABASE_URL")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+MY_TELEGRAM_ID = os.environ.get("MY_TELEGRAM_ID")
 
 twilio_client = Client(TWILIO_SID, TWILIO_TOKEN)
 claude = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 
-invoice_counter = 5719
-best_day_record = 0
 pending_invoice = None
 
 def get_db():
@@ -46,6 +46,7 @@ def init_db():
                 id SERIAL PRIMARY KEY,
                 role VARCHAR(20),
                 content TEXT,
+                platform VARCHAR(20) DEFAULT 'whatsapp',
                 created_at TIMESTAMP DEFAULT NOW()
             );
             CREATE TABLE IF NOT EXISTS expenses (
@@ -97,11 +98,11 @@ def init_db():
     except Exception as e:
         print(f"DB init error: {e}")
 
-def save_message(role, content):
+def save_message(role, content, platform="whatsapp"):
     try:
         conn = get_db()
         cur = conn.cursor()
-        cur.execute("INSERT INTO messages (role, content) VALUES (%s, %s)", (role, content))
+        cur.execute("INSERT INTO messages (role, content, platform) VALUES (%s, %s, %s)", (role, content, platform))
         conn.commit()
         cur.close()
         conn.close()
@@ -155,13 +156,31 @@ def send_whatsapp(msg):
             to=to,
             body=msg
         )
-        print(f"Sent: {msg[:50]}")
+        print(f"WhatsApp sent: {msg[:50]}")
     except Exception as e:
-        print(f"Send error: {e}")
+        print(f"WhatsApp error: {e}")
 
-def scan_receipt(image_url):
+def send_telegram(msg, chat_id=None):
     try:
-        img_data = requests.get(image_url, auth=(TWILIO_SID, TWILIO_TOKEN)).content
+        target = chat_id or MY_TELEGRAM_ID
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        requests.post(url, json={"chat_id": target, "text": msg, "parse_mode": "Markdown"})
+        print(f"Telegram sent: {msg[:50]}")
+    except Exception as e:
+        print(f"Telegram error: {e}")
+
+def send_msg(msg, platform="whatsapp", chat_id=None):
+    if platform == "telegram":
+        send_telegram(msg, chat_id)
+    else:
+        send_whatsapp(msg)
+
+def scan_receipt(image_url, platform="whatsapp"):
+    try:
+        if platform == "telegram":
+            img_data = requests.get(image_url).content
+        else:
+            img_data = requests.get(image_url, auth=(TWILIO_SID, TWILIO_TOKEN)).content
         b64 = base64.b64encode(img_data).decode("utf-8")
         response = claude.messages.create(
             model="claude-sonnet-4-6",
@@ -266,9 +285,9 @@ def send_email(to, subject, body, attachment_path=None):
         print(f"Email error: {e}")
         return False
 
-def set_reminder(minutes, message):
+def set_reminder(minutes, message, platform="whatsapp", chat_id=None):
     def remind():
-        send_whatsapp(f"⏰ Reminder: {message}")
+        send_msg(f"⏰ Reminder: {message}", platform, chat_id)
     timer = threading.Timer(minutes * 60, remind)
     timer.start()
 
@@ -304,14 +323,15 @@ def get_state_summary():
         print(f"State error: {e}")
         return {"error": str(e)}
 
-def ask_melisa(user_message):
+def ask_melisa(user_message, platform="whatsapp"):
     global pending_invoice
     state = get_state_summary()
     history = get_history(30)
-    system_prompt = f"""You are Melisa 😊, a smart personal WhatsApp assistant for Tomer who runs AMPM Services (locksmith business in NZ/Australia).
+    system_prompt = f"""You are Melisa 😊, a smart personal WhatsApp/Telegram assistant for Tomer who runs AMPM Services (locksmith business in NZ/Australia).
 
 Current date/time: {datetime.now().strftime("%Y-%m-%d %H:%M")}
 Business state: {json.dumps(state, indent=2)}
+Platform: {platform}
 
 You are Tomer's FULL personal assistant:
 - Business: invoices, expenses, jobs, reports, reminders about unpaid invoices
@@ -339,22 +359,12 @@ RESPOND with JSON:
   "search_query": "only if action is search_web"
 }}
 
-ACTION DATA FORMATS:
-- set_reminder: {{"minutes": 20, "reminder_message": "text"}}
-- create_invoice: {{"client_name": "", "client_email": "", "client_address": "", "items": [{{"description": "", "amount": 0}}]}}
-- update_invoice: {{"field": "value"}} or {{"items": [...]}}
-- save_job: {{"amount": 0, "parts": 0, "description": ""}}
-- save_expense: {{"amount": 0, "vendor": "", "category": "", "description": ""}}
-- mark_paid: {{"invoice_number": 5719}}
-- save_event: {{"title": "", "event_date": "", "remind_before_minutes": 60}}
-- search_web: search_query field with what to search
-
 Be friendly, natural, encouraging. Use emojis. Keep replies SHORT.
 Remember Tomer's preferences and past conversations.
 For business motivation mention best day record NZ$ {state.get('best_day_record', 0):.2f}.
 If unclear, ask ONE simple question."""
 
-    save_message("user", user_message)
+    save_message("user", user_message, platform)
     history.append({"role": "user", "content": user_message})
     response = claude.messages.create(
         model="claude-sonnet-4-6",
@@ -367,10 +377,10 @@ If unclear, ask ONE simple question."""
         reply = json.loads(reply_text)
     except:
         reply = {"message": reply_text, "action": "none", "data": {}}
-    save_message("assistant", reply_text)
+    save_message("assistant", reply_text, platform)
     return reply
 
-def handle_action(action, data, search_query=None):
+def handle_action(action, data, search_query=None, platform="whatsapp", chat_id=None):
     global pending_invoice
     try:
         conn = get_db()
@@ -441,7 +451,7 @@ def handle_action(action, data, search_query=None):
         elif action == "set_reminder":
             minutes = data.get("minutes", 20)
             reminder_msg = data.get("reminder_message", "Check in!")
-            set_reminder(minutes, reminder_msg)
+            set_reminder(minutes, reminder_msg, platform, chat_id)
         elif action == "save_event":
             cur.execute(
                 "INSERT INTO events (title, event_date) VALUES (%s, %s)",
@@ -494,16 +504,13 @@ def handle_action(action, data, search_query=None):
         print(f"Action error: {e}")
     return None
 
-@app.route("/webhook", methods=["POST"])
-def webhook():
+def process_message(msg, platform="whatsapp", chat_id=None, image_url=None):
     global pending_invoice
-    msg = request.form.get("Body", "").strip()
-    media_url = request.form.get("MediaUrl0")
-    num_media = int(request.form.get("NumMedia", 0))
-    print(f"Received: {msg}")
-    if num_media > 0 and media_url:
-        send_whatsapp("📸 Scanning your receipt... one moment!")
-        data = scan_receipt(media_url)
+    print(f"Received [{platform}]: {msg}")
+
+    if image_url:
+        send_msg("📸 Scanning your receipt... one moment!", platform, chat_id)
+        data = scan_receipt(image_url, platform)
         amount = float(data.get("amount") or 0)
         vendor = data.get("vendor", "Unknown")
         date = data.get("date") or datetime.now().strftime("%Y-%m-%d")
@@ -521,15 +528,17 @@ def webhook():
             conn.close()
         except Exception as e:
             print(f"DB error: {e}")
-        send_whatsapp(f"✅ Expense saved!\n🏪 {vendor}\n💸 NZ$ {amount:.2f}\n🏷️ {category.title()}\n📅 {date}\n📝 {description}\n\nIs this correct? Reply YES or correct me!")
-        return "OK", 200
+        send_msg(f"✅ Expense saved!\n🏪 {vendor}\n💸 NZ$ {amount:.2f}\n🏷️ {category.title()}\n📅 {date}\n📝 {description}\n\nIs this correct? Reply YES or correct me!", platform, chat_id)
+        return
+
     try:
-        reply = ask_melisa(msg)
+        reply = ask_melisa(msg, platform)
         action = reply.get("action", "none")
         data = reply.get("data", {})
         message = reply.get("message", "")
         search_query = reply.get("search_query", "")
-        extra = handle_action(action, data, search_query)
+        extra = handle_action(action, data, search_query, platform, chat_id)
+
         if action == "create_invoice" and pending_invoice:
             preview = f"📄 Invoice Preview #{pending_invoice['number']}\n\n"
             preview += f"👤 {pending_invoice['client_name']}\n"
@@ -539,16 +548,48 @@ def webhook():
                 preview += f"  • {item['description']}: NZ$ {item['amount']:.2f}\n"
             preview += f"\n💰 Total: NZ$ {pending_invoice['total']:.2f}\n\n"
             preview += "Say CONFIRM to send or tell me what to change!"
-            send_whatsapp(message)
-            send_whatsapp(preview)
+            send_msg(message, platform, chat_id)
+            send_msg(preview, platform, chat_id)
         elif extra and isinstance(extra, str):
-            send_whatsapp(message)
-            send_whatsapp(extra)
+            send_msg(message, platform, chat_id)
+            send_msg(extra, platform, chat_id)
         else:
-            send_whatsapp(message)
+            send_msg(message, platform, chat_id)
     except Exception as e:
-        print(f"Webhook error: {e}")
-        send_whatsapp("Sorry, I had a small issue! Try again 😊")
+        print(f"Error: {e}")
+        send_msg("Sorry, I had a small issue! Try again 😊", platform, chat_id)
+
+@app.route("/webhook", methods=["POST"])
+def whatsapp_webhook():
+    msg = request.form.get("Body", "").strip()
+    media_url = request.form.get("MediaUrl0")
+    num_media = int(request.form.get("NumMedia", 0))
+    image_url = media_url if num_media > 0 else None
+    process_message(msg, "whatsapp", None, image_url)
+    return "OK", 200
+
+@app.route("/telegram", methods=["POST"])
+def telegram_webhook():
+    data = request.json
+    if not data:
+        return "OK", 200
+    message = data.get("message", {})
+    chat_id = str(message.get("chat", {}).get("id", ""))
+    text = message.get("text", "")
+    photo = message.get("photo")
+
+    if photo:
+        file_id = photo[-1]["file_id"]
+        file_info = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getFile?file_id={file_id}").json()
+        file_path = file_info["result"]["file_path"]
+        image_url = f"https://api.telegram.org/file/bot{TELEGRAM_TOKEN}/{file_path}"
+        process_message(text or "expense", "telegram", chat_id, image_url)
+    elif text:
+        if not MY_TELEGRAM_ID:
+            save_setting("MY_TELEGRAM_ID", chat_id)
+            os.environ["MY_TELEGRAM_ID"] = chat_id
+        process_message(text, "telegram", chat_id)
+
     return "OK", 200
 
 def send_daily_report():
@@ -562,7 +603,10 @@ def send_daily_report():
         t_expense = float(cur.fetchone()["total"])
         cur.close()
         conn.close()
-        send_whatsapp(f"📊 Good evening Tomer! Daily Report — {today}\n\n💰 Income: NZ$ {t_income:.2f}\n🧾 Expenses: NZ$ {t_expense:.2f}\n📈 Profit: NZ$ {(t_income-t_expense):.2f}")
+        msg = f"📊 Good evening Tomer! Daily Report — {today}\n\n💰 Income: NZ$ {t_income:.2f}\n🧾 Expenses: NZ$ {t_expense:.2f}\n📈 Profit: NZ$ {(t_income-t_expense):.2f}"
+        send_whatsapp(msg)
+        if MY_TELEGRAM_ID:
+            send_telegram(msg)
     except Exception as e:
         print(f"Daily report error: {e}")
 
@@ -575,7 +619,10 @@ def check_unpaid():
         cur.close()
         conn.close()
         for inv in unpaid:
-            send_whatsapp(f"⏰ Reminder: Invoice #{inv['number']} for {inv['client_name']} — NZ$ {inv['total']:.2f} still unpaid!")
+            msg = f"⏰ Reminder: Invoice #{inv['number']} for {inv['client_name']} — NZ$ {inv['total']:.2f} still unpaid!"
+            send_whatsapp(msg)
+            if MY_TELEGRAM_ID:
+                send_telegram(msg)
     except Exception as e:
         print(f"Unpaid check error: {e}")
 
