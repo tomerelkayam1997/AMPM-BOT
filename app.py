@@ -164,7 +164,7 @@ def scan_receipt(image_url):
         img_data = requests.get(image_url, auth=(TWILIO_SID, TWILIO_TOKEN)).content
         b64 = base64.b64encode(img_data).decode("utf-8")
         response = claude.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             max_tokens=500,
             messages=[{
                 "role": "user",
