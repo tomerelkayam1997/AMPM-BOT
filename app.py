@@ -183,7 +183,7 @@ def scan_receipt(image_url):
 def search_web(query):
     try:
         response = claude.messages.create(
-model="claude-sonnet-4-6",
+            model="claude-sonnet-4-6",
             max_tokens=1000,
             tools=[{"type": "web_search_20250305", "name": "web_search"}],
             messages=[{"role": "user", "content": f"Search for: {query}. Give a brief helpful summary."}]
@@ -277,24 +277,17 @@ def get_state_summary():
         conn = get_db()
         cur = conn.cursor()
         today = datetime.now().strftime("%Y-%m-%d")
-
         cur.execute("SELECT COALESCE(SUM(net), 0) as total FROM income WHERE date LIKE %s", (f"{today}%",))
         today_income = float(cur.fetchone()["total"])
-
         cur.execute("SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE date LIKE %s", (f"{today}%",))
         today_expenses = float(cur.fetchone()["total"])
-
         cur.execute("SELECT COUNT(*) as count, COALESCE(SUM(total), 0) as total FROM invoices WHERE paid = FALSE")
         inv_row = cur.fetchone()
-
         cur.execute("SELECT number, client_name, total FROM invoices WHERE paid = FALSE ORDER BY created_at DESC LIMIT 3")
         unpaid = [dict(r) for r in cur.fetchall()]
-
         cur.close()
         conn.close()
-
         best = float(get_setting("best_day_record", "0"))
-
         return {
             "today_income": today_income,
             "today_expenses": today_expenses,
@@ -313,10 +306,8 @@ def get_state_summary():
 
 def ask_melisa(user_message):
     global pending_invoice
-
     state = get_state_summary()
     history = get_history(30)
-
     system_prompt = f"""You are Melisa 😊, a smart personal WhatsApp assistant for Tomer who runs AMPM Services (locksmith business in NZ/Australia).
 
 Current date/time: {datetime.now().strftime("%Y-%m-%d %H:%M")}
@@ -332,7 +323,7 @@ You are Tomer's FULL personal assistant:
 BUSINESS DETAILS:
 - Business: AMPM Services (locksmith)
 - NZBN: 9429053281210
-- Phone: +64226068460  
+- Phone: +64226068460
 - Email: ampmservices2024@gmail.com
 - Bank: AMPM Services, 03-0255-0294020-000
 - No GST yet (will add 15% NZ GST later)
@@ -365,38 +356,31 @@ If unclear, ask ONE simple question."""
 
     save_message("user", user_message)
     history.append({"role": "user", "content": user_message})
-
     response = claude.messages.create(
-model="claude-sonnet-4-6",
+        model="claude-sonnet-4-6",
         max_tokens=1000,
         system=system_prompt,
         messages=history
     )
-
     reply_text = response.content[0].text.replace("```json", "").replace("```", "").strip()
-
     try:
         reply = json.loads(reply_text)
     except:
         reply = {"message": reply_text, "action": "none", "data": {}}
-
     save_message("assistant", reply_text)
     return reply
 
 def handle_action(action, data, search_query=None):
     global pending_invoice
-
     try:
         conn = get_db()
         cur = conn.cursor()
-
         if action == "save_expense":
             cur.execute(
                 "INSERT INTO expenses (amount, vendor, category, description, date) VALUES (%s, %s, %s, %s, %s)",
                 (float(data.get("amount", 0)), data.get("vendor", ""), data.get("category", "other"), data.get("description", ""), datetime.now().strftime("%Y-%m-%d"))
             )
             conn.commit()
-
         elif action == "save_job":
             amount = float(data.get("amount", 0))
             parts = float(data.get("parts", 0))
@@ -412,7 +396,6 @@ def handle_action(action, data, search_query=None):
             if today_total > best:
                 save_setting("best_day_record", today_total)
             conn.commit()
-
         elif action == "create_invoice":
             inv_num = int(get_setting("invoice_counter", "5719"))
             pending_invoice = {
@@ -425,7 +408,6 @@ def handle_action(action, data, search_query=None):
                 "date": datetime.now().strftime("%d %b %Y"),
                 "paid": False
             }
-
         elif action == "update_invoice" and pending_invoice:
             for key, value in data.items():
                 if key == "items":
@@ -433,7 +415,6 @@ def handle_action(action, data, search_query=None):
                     pending_invoice["total"] = sum(i["amount"] for i in value)
                 else:
                     pending_invoice[key] = value
-
         elif action == "confirm_invoice" and pending_invoice:
             pdf_path = create_invoice_pdf(pending_invoice)
             email_body = f"""<h2>Invoice #{pending_invoice['number']}</h2>
@@ -453,24 +434,20 @@ def handle_action(action, data, search_query=None):
             save_setting("invoice_counter", new_num)
             conn.commit()
             pending_invoice = None
-
         elif action == "mark_paid":
             inv_num = data.get("invoice_number")
             cur.execute("UPDATE invoices SET paid = TRUE WHERE number = %s", (inv_num,))
             conn.commit()
-
         elif action == "set_reminder":
             minutes = data.get("minutes", 20)
             reminder_msg = data.get("reminder_message", "Check in!")
             set_reminder(minutes, reminder_msg)
-
         elif action == "save_event":
             cur.execute(
                 "INSERT INTO events (title, event_date) VALUES (%s, %s)",
                 (data.get("title", ""), data.get("event_date", ""))
             )
             conn.commit()
-
         elif action == "show_report":
             today = datetime.now().strftime("%Y-%m-%d")
             cur.execute("SELECT COALESCE(SUM(net), 0) as total FROM income WHERE date LIKE %s", (f"{today}%",))
@@ -480,7 +457,6 @@ def handle_action(action, data, search_query=None):
             cur.close()
             conn.close()
             return f"📊 Daily Report — {today}\n\n💰 Income: NZ$ {t_income:.2f}\n🧾 Expenses: NZ$ {t_expense:.2f}\n📈 Profit: NZ$ {(t_income-t_expense):.2f}"
-
         elif action == "show_weekly":
             week_ago = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
             cur.execute("SELECT COALESCE(SUM(net), 0) as total FROM income WHERE date >= %s", (week_ago,))
@@ -497,7 +473,6 @@ def handle_action(action, data, search_query=None):
             cur.close()
             conn.close()
             return "\n".join(lines)
-
         elif action == "show_outstanding":
             cur.execute("SELECT number, client_name, total FROM invoices WHERE paid = FALSE")
             unpaid = cur.fetchall()
@@ -509,18 +484,14 @@ def handle_action(action, data, search_query=None):
             for inv in unpaid:
                 lines.append(f"#{inv['number']} — {inv['client_name']} — NZ$ {inv['total']:.2f}")
             return "\n".join(lines)
-
         elif action == "search_web" and search_query:
             cur.close()
             conn.close()
             return search_web(search_query)
-
         cur.close()
         conn.close()
-
     except Exception as e:
         print(f"Action error: {e}")
-
     return None
 
 @app.route("/webhook", methods=["POST"])
@@ -530,7 +501,6 @@ def webhook():
     media_url = request.form.get("MediaUrl0")
     num_media = int(request.form.get("NumMedia", 0))
     print(f"Received: {msg}")
-
     if num_media > 0 and media_url:
         send_whatsapp("📸 Scanning your receipt... one moment!")
         data = scan_receipt(media_url)
@@ -553,16 +523,13 @@ def webhook():
             print(f"DB error: {e}")
         send_whatsapp(f"✅ Expense saved!\n🏪 {vendor}\n💸 NZ$ {amount:.2f}\n🏷️ {category.title()}\n📅 {date}\n📝 {description}\n\nIs this correct? Reply YES or correct me!")
         return "OK", 200
-
     try:
         reply = ask_melisa(msg)
         action = reply.get("action", "none")
         data = reply.get("data", {})
         message = reply.get("message", "")
         search_query = reply.get("search_query", "")
-
         extra = handle_action(action, data, search_query)
-
         if action == "create_invoice" and pending_invoice:
             preview = f"📄 Invoice Preview #{pending_invoice['number']}\n\n"
             preview += f"👤 {pending_invoice['client_name']}\n"
@@ -579,11 +546,9 @@ def webhook():
             send_whatsapp(extra)
         else:
             send_whatsapp(message)
-
     except Exception as e:
         print(f"Webhook error: {e}")
         send_whatsapp("Sorry, I had a small issue! Try again 😊")
-
     return "OK", 200
 
 def send_daily_report():
