@@ -1,0 +1,11 @@
+flask
+anthropic
+twilio
+apscheduler
+fpdf
+gspread
+oauth2client
+google-api-python-client
+google-auth
+requests
+zmanim
