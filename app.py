@@ -183,8 +183,7 @@ def scan_receipt(image_url):
 def search_web(query):
     try:
         response = claude.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=1000,
+model="claude-sonnet-4-6",            max_tokens=1000,
             tools=[{"type": "web_search_20250305", "name": "web_search"}],
             messages=[{"role": "user", "content": f"Search for: {query}. Give a brief helpful summary."}]
         )
